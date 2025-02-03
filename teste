@@ -1,0 +1,85 @@
+import cv2
+import numpy as np
+import re
+
+# Chargement du modèle de détection de visage
+face_proto = "deploy.prototxt"
+face_model = "res10_300x300_ssd_iter_140000.caffemodel"
+face_net = cv2.dnn.readNet(face_model, face_proto)
+
+# Chargement du modèle d'estimation d'âge
+age_proto = "age_deploy.prototxt"
+age_model = "age_net.caffemodel"
+age_net = cv2.dnn.readNet(age_model, age_proto)
+
+# Liste des tranches d'âge prédéfinies par le modèle
+AGE_LIST = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
+
+# Chargement de l'image (remplacer "image.jpg" par le chemin de votre image)
+image = cv2.imread("image.jpg")
+if image is None:
+    print("Erreur lors du chargement de l'image.")
+    exit()
+
+(h, w) = image.shape[:2]
+
+# Préparation de l'image pour la détection de visage
+blob = cv2.dnn.blobFromImage(image, 1.0, (300, 300), (104.0, 177.0, 123.0))
+face_net.setInput(blob)
+detections = face_net.forward()
+
+# Vérification des visages détectés
+if detections.shape[2] == 0:
+    print("Aucun visage détecté.")
+    exit()
+
+# Pour simplifier, nous considérons le premier visage détecté avec une confiance suffisante
+confiance_min = 0.5
+for i in range(0, detections.shape[2]):
+    confiance = detections[0, 0, i, 2]
+    if confiance > confiance_min:
+        # Récupération des coordonnées de la boîte englobante du visage
+        box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+        (startX, startY, endX, endY) = box.astype("int")
+        
+        # Extraction de la région du visage
+        face = image[startY:endY, startX:endX]
+        if face.shape[0] < 20 or face.shape[1] < 20:
+            continue  # On ignore les visages trop petits
+        
+        # Préparation du visage pour l'estimation d'âge
+        # Le modèle d'âge attend une image de 227x227 et une soustraction de moyenne
+        face_blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227),
+                                          (78.4263377603, 87.7689143744, 114.895847746),
+                                          swapRB=False)
+        age_net.setInput(face_blob)
+        age_preds = age_net.forward()
+        # On récupère l'indice de la tranche d'âge avec la plus forte probabilité
+        i_age = age_preds[0].argmax()
+        age_range = AGE_LIST[i_age]
+        print("Tranche d'âge estimée :", age_range)
+        
+        # Pour déterminer si la personne est majeure, on peut calculer l'âge moyen de la tranche
+        numbers = re.findall(r'\d+', age_range)
+        if len(numbers) == 2:
+            avg_age = (int(numbers[0]) + int(numbers[1])) / 2
+        else:
+            avg_age = int(numbers[0])
+        
+        if avg_age >= 18:
+            print("La personne est majeure (âge moyen estimé : {:.1f} ans).".format(avg_age))
+        else:
+            print("La personne est mineure (âge moyen estimé : {:.1f} ans).".format(avg_age))
+        
+        # Affichage d'un rectangle et de la tranche d'âge sur l'image
+        cv2.rectangle(image, (startX, startY), (endX, endY), (0, 255, 0), 2)
+        cv2.putText(image, age_range, (startX, startY - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Nous traitons uniquement le premier visage détecté avec suffisamment de confiance
+        break
+
+# Affichage du résultat
+cv2.imshow("Estimation d'age", image)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
